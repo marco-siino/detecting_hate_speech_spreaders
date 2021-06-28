@@ -1,0 +1,562 @@
+## Detection of Hate Speech Spreader Profiles using Convolutional Neural Networks. 
+Model Training Notebook.
+Code by M. Siino. 
+
+From the paper: "Detection of Hate Speech Spreader Profiles using Convolutional Neural Networks" by M.Siino et al.
+
+
+
+## Importing modules.
+
+import matplotlib.pyplot as plt
+import os
+import random
+import re
+import shutil
+import string
+import tensorflow as tf
+
+from tensorflow.keras import layers
+from tensorflow.keras import losses
+from tensorflow.keras import preprocessing
+from tensorflow.keras.layers.experimental.preprocessing import TextVectorization
+from google.colab import files
+from io import open
+from numpy.random import seed
+import numpy as np
+from pathlib import Path
+
+os.environ['TF_CUDNN_DETERMINISTIC']='true'
+os.environ['TF_DETERMINISTIC_OPS']='true'
+
+## Importing DS and extract in current working directory.
+
+# Url obtained starting from this: https://drive.google.com/file/d/19ZcqEv88euKB71HfAWjTGN3uCKp2qsfP/ and forcing export=download.
+urlTrainingSet = "https://drive.google.com/uc?export=download&id=1ifAvjKCUFff-8KlB99dUBCD50xu36dOd"
+urlTestSet="https://drive.google.com/uc?export=download&id=1-vZAvJNQB_DnuPbPbgWB4FDXeci7z2GZ"
+
+training_set = tf.keras.utils.get_file("pan21-author-profiling-training-2021-03-14.zip", urlTrainingSet,
+                                    extract=True, archive_format='zip',cache_dir='.',
+                                    cache_subdir='')
+test_set = tf.keras.utils.get_file("pan21-author-profiling-test-without-gold.zip", urlTestSet, extract=True, archive_format='zip',cache_dir='.', cache_subdir='')
+
+training_set_dir = os.path.join(os.path.dirname(training_set), 'pan21-author-profiling-training-2021-03-14')
+test_set_dir = os.path.join(os.path.dirname(test_set), 'pan21-author-profiling-test-without-gold')
+
+print(training_set)
+print(training_set_dir)
+
+!ls -A
+
+## Build folders hierarchy to use Keras folders preprocessing function.
+
+### Training Folders. ###
+
+# First level directory.
+if not os.path.exists('train_dir_en'):
+    os.makedirs('train_dir_en')
+if not os.path.exists('train_dir_es'):
+    os.makedirs('train_dir_es')
+
+# Class labels directory.
+if not os.path.exists('train_dir_en/0'):
+    os.makedirs('train_dir_en/0')
+if not os.path.exists('train_dir_es/0'):
+    os.makedirs('train_dir_es/0')
+if not os.path.exists('train_dir_en/1'):
+    os.makedirs('train_dir_en/1')
+if not os.path.exists('train_dir_es/1'):
+    os.makedirs('train_dir_es/1')
+
+# Make Py variables.
+train_dir='train_dir_'
+
+## Test Folders. ##
+# First level directory.
+if not os.path.exists('test_dir_en'):
+    os.makedirs('test_dir_en')
+if not os.path.exists('test_dir_es'):
+    os.makedirs('test_dir_es')
+
+# Not labelled directories.
+if not os.path.exists('test_dir_en/unlabelled'):
+    os.makedirs('test_dir_en/unlabelled')
+if not os.path.exists('test_dir_es/unlabelled'):
+    os.makedirs('test_dir_es/unlabelled')
+
+# Make Py variables.
+test_dir='test_dir_'
+
+!ls -A
+
+## Set language and directory paths.
+
+
+# Set en and es ground truth file path for train_dir. We haven't a ground truth file for the test set.
+language='en'
+
+truth_file_training_dir_en=training_set_dir+'/'+language+'/'
+truth_file_training_path_en = truth_file_training_dir_en+'truth.txt'
+
+language='es'
+
+truth_file_training_dir_es=training_set_dir+'/'+language+'/'
+truth_file_training_path_es = truth_file_training_dir_es+'truth.txt'
+
+
+## Read truth.txt to organize training dataset folders.
+
+
+
+language='en'
+
+# Open the file truth.txt with read only permit.
+f = open(truth_file_training_path_en, "r")
+# use readline() to read the first line 
+line = f.readline()
+# use the read line to read further.
+# If the file is not empty keep reading one line
+# at a time, till the file is empty
+while line:
+    # Split line at :::
+    x = line.split(":::")
+    fNameXml = x[0]+'.xml'
+    fNameTxt = x[0]+'.txt'
+    # Second coord [0] gets just the first character (label) and not /n too.
+    label = x[1][0]
+
+    # Now move the file to the right folder.
+    if os.path.exists(truth_file_training_dir_en+fNameXml):
+      os.rename(truth_file_training_dir_en+fNameXml, './train_dir_'+language+'/'+label+'/'+fNameTxt )
+
+    # use readline() to read next line
+    line = f.readline()
+
+language='es'
+
+# Open the file truth.txt with read only permit.
+f = open(truth_file_training_path_es, "r")
+# use readline() to read the first line 
+line = f.readline()
+# use the read line to read further.
+# If the file is not empty keep reading one line
+# at a time, till the file is empty
+while line:
+    # Split line at :::
+    x = line.split(":::")
+    fNameXml = x[0]+'.xml'
+    fNameTxt = x[0]+'.txt'
+    # Second coord [0] gets just the first character (label) and not /n too.
+    label = x[1][0]
+
+    # Now move the file to the right folder.
+    if os.path.exists(truth_file_training_dir_es+fNameXml):
+      os.rename(truth_file_training_dir_es+fNameXml, './train_dir_'+language+'/'+label+'/'+fNameTxt )
+
+    # use readline() to read next line
+    line = f.readline()
+
+## Oganize test dataset folders. To build keras ds we consider each sample unlabelled.
+
+language='en'
+
+for filename in os.listdir(test_set_dir+'/'+language+'/'):
+  # Now move the file to the right folder.
+  x = filename.split(".")
+  fNameTxt = x[0]+'.txt'
+  if os.path.exists(test_set_dir+'/'+language+'/'+filename):
+    os.rename(test_set_dir+'/'+language+'/'+filename, './test_dir_'+language+'/unlabelled/'+fNameTxt )
+
+language='es'
+
+for filename in os.listdir(test_set_dir+'/'+language+'/'):
+  # Now move the file to the right folder.
+  x = filename.split(".")
+  fNameTxt = x[0]+'.txt'
+  if os.path.exists(test_set_dir+'/'+language+'/'+filename):
+    os.rename(test_set_dir+'/'+language+'/'+filename, './test_dir_'+language+'/unlabelled/'+fNameTxt )
+
+
+
+## Function to pre-process source text. (Our preprocessing choices are better discussed on our conference paper.)
+
+def custom_standardization(input_data):
+  formatting_removed_es_1 = tf.strings.regex_replace(input_data, '<author lang="es" class="1">\n\t', '<author_lang="es">')
+  formatting_removed_es_0 = tf.strings.regex_replace(formatting_removed_es_1, '<author lang="es" class="0">\n\t', '<author_lang="es">')
+
+  formatting_removed_en_1 = tf.strings.regex_replace(formatting_removed_es_0, '<author lang="en" class="1">\n\t', '<author_lang="en">')
+  formatting_removed_en_0 = tf.strings.regex_replace(formatting_removed_en_1, '<author lang="en" class="0">\n\t', '<author_lang="en">')
+
+  tag_open_CDATA_removed = tf.strings.regex_replace(formatting_removed_en_0, '<\!\[CDATA\[', ' <')
+  tag_closed_CDATA_removed = tf.strings.regex_replace(tag_open_CDATA_removed,'\]{1,}>', '')
+
+  tag_open_documents_removed  = tf.strings.regex_replace(tag_closed_CDATA_removed, '<documents>\n(\t){0,2}', '')
+  tag_closed_documents_removed = tf.strings.regex_replace(tag_open_documents_removed, '</documents>\n(\t){0,2}', '')
+
+  tag_open_document_whitespace_removed = tf.strings.regex_replace(tag_closed_documents_removed, '<document> ', '<document>')
+  tag_closed_document_add_whitespace = tf.strings.regex_replace(tag_open_document_whitespace_removed, '</document>\n(\t){0,2}', '</document> ')
+ 
+  return  tag_closed_document_add_whitespace
+
+## Generate full training set (union of en and es).
+
+
+
+# Generate full randomized training set.
+batch_size=1
+language="es"
+es_train_ds = tf.keras.preprocessing.text_dataset_from_directory(
+    train_dir+language, 
+    batch_size=batch_size,
+    shuffle=False
+    )
+
+language="en"
+en_train_ds = tf.keras.preprocessing.text_dataset_from_directory(
+    train_dir+language, 
+    batch_size=batch_size,
+    shuffle=False
+    )
+
+full_train_ds=es_train_ds.concatenate(en_train_ds)
+full_train_ds=full_train_ds.shuffle(400,seed=1, reshuffle_each_iteration=False)
+
+# Batch the full ds to speed up the training.
+full_train_ds_batched=full_train_ds.batch(2)
+
+indexRTS = 1
+
+for element in full_train_ds:
+  authorDocument=element[0]
+  label=element[1]
+  
+  print(indexRTS,") Preprocessed: ", str(custom_standardization(authorDocument[0].numpy()[:300])))
+  print("And has label: ", label[0].numpy())
+  indexRTS+=1
+
+full_train_ds_size=len(full_train_ds)
+
+
+## Get the length of the longest sample in full training set.
+
+
+
+# Set a very large sequence length to find the longest sample.
+sequence_length = 10000
+vectorize_layer = TextVectorization(
+    standardize=custom_standardization,
+    output_mode='int',
+    output_sequence_length=sequence_length)
+
+train_text = full_train_ds.map(lambda x, y: x)
+vectorize_layer.adapt(train_text)
+#vectorize_layer.get_vocabulary()
+
+model = tf.keras.models.Sequential()
+model.add(tf.keras.Input(shape=(1,), dtype=tf.string))
+model.add(vectorize_layer)
+
+longest_sample_length=1
+
+for element in full_train_ds:
+  authorDocument=element[0]
+  label=element[1]
+  
+  #print("Sample considered is: ", authorDocument[0].numpy())
+  #print("Preprocessed: ", str(custom_standardization(authorDocument[0].numpy())))
+  #print("And has label: ", label[0].numpy())
+
+  # Count the number of zeros from the last non-zero token to the end of the sample. 
+  # Shortest tokenized sample has less zeros than others.
+  out=model(authorDocument)
+  token_nr_index=sequence_length-1
+  current_sample_zeros_counter=0
+  while out.numpy()[0][token_nr_index]==0:
+    token_nr_index-=1
+    current_sample_zeros_counter+=1
+
+  shortest_padding_length=sequence_length-longest_sample_length
+  if current_sample_zeros_counter<shortest_padding_length:
+    longest_sample_length=sequence_length-current_sample_zeros_counter
+
+#print(out.numpy()[0][3229:3400])
+print(longest_sample_length)
+
+## First model's layer: Text Vectorization.
+
+
+
+# After tokenization longest_sample_length covers all the document lenghts in our dataset.
+sequence_length = longest_sample_length
+
+vectorize_layer = TextVectorization(
+    standardize=custom_standardization,
+    #max_tokens=max_features,
+    output_mode='int',
+    output_sequence_length=sequence_length)
+
+train_text = full_train_ds.map(lambda x, y: x)
+vectorize_layer.adapt(train_text)
+
+## An example of how splitting text and token mapping. (No need to execute).
+
+
+for element in out[0]:
+  #print(element)
+  print(element,"->",vectorize_layer.get_vocabulary()[element])
+
+## Set word embedding dimension.
+
+
+# Word embedding dimensions.
+embedding_dim = 100
+
+## Callback function to stop training and export the model.
+
+ callbackReached = 0
+ 
+ # Defining callback function. Not used! 
+ class myCallback(tf.keras.callbacks.Callback):
+        def on_epoch_end(self,epoch,logs={}):
+          # Next line to reset the random tf generator. 
+          np.random.seed(1)   
+          random.seed(2)                                             
+          tf.random.set_seed(1234)
+          #print(logs.get('loss'), "is of type", type(logs.get('loss')))
+          if(logs.get('loss')<0.00003 and logs.get('binary_accuracy')>=0.99):
+            print("\nReached 99.0% accuracy and very low loss so stop training!")
+            global callbackReached
+            callbackReached=1
+            model.save('hss_model', save_format='tf') 
+            self.model.stop_training = True
+
+callbacks = myCallback()
+
+## Split the full training set to do a 5-cross fold validation. (No need to execute!)
+
+
+
+
+# 5 Cross fold generation example. 
+
+# 1° Fold -> 80% - 20%V
+# 2° Fold -> 60% - 20%V - 20%
+# 3° Fold -> 40% - 20%V - 40%
+# 4° Fold -> 20% - 20%V - 60%
+# 5° Fold -> 20%V - 80%
+
+train=[]
+val=[]
+
+# Percentage start and end of validation subset within full_train_ds.
+val_percentage_start=80
+val_percentage_end=100
+val_percentage_size=20
+fold_nr=5
+
+for i in range(0,fold_nr):
+  train.append(full_train_ds.take(int(full_train_ds_size*val_percentage_start/100)))
+  train[i] = train[i].concatenate(full_train_ds.skip(int(full_train_ds_size*val_percentage_end/100)))
+
+  val.append(full_train_ds.skip(int(full_train_ds_size*val_percentage_start/100)))
+  val[i] = val[i].take(int(full_train_ds_size*val_percentage_size/100))
+
+  val_percentage_start-=val_percentage_size
+  val_percentage_end-=val_percentage_size
+
+## Train the model to see its performance over the 5 fold. (No need to execute!)
+
+
+
+
+for fold_nr in range(0,fold_nr):
+  print("Fold nr.: ", fold_nr)
+  seed = fold_nr
+
+  print("Used seed: ", seed)
+  train_text = train[fold_nr].map(lambda x, y: x)
+  vectorize_layer.adapt(train_text)
+
+  current_train_ds_batched=train[fold_nr].batch(2)
+
+  initializer=tf.keras.initializers.GlorotUniform(seed=seed)
+
+  model = tf.keras.Sequential([
+                              tf.keras.Input(shape=(1,), dtype=tf.string),
+                              vectorize_layer,
+                              #embedding_layer,
+                              layers.Embedding(len(vectorize_layer.get_vocabulary()) + 1,embedding_dim,embeddings_initializer=initializer),                     
+                              #layers.Dropout(0.2),
+
+                              #layers.Bidirectional(layers.LSTM(64,return_sequences=True)),
+
+                              layers.Conv1D(64,36,kernel_initializer=initializer,bias_initializer='zeros',activation='relu'),
+                              layers.MaxPooling1D(4),
+                              #layers.AveragePooling1D(8),
+                              
+                              layers.GlobalAveragePooling1D(),
+                              #layers.GlobalMaxPooling1D(),
+                              layers.Dense(1,kernel_initializer=initializer,bias_initializer='zeros')
+    ])
+    
+  opt = tf.keras.optimizers.Adam()
+  model.compile(loss=losses.BinaryCrossentropy(from_logits=True), optimizer=opt, metrics=tf.metrics.BinaryAccuracy(threshold=0.0)) 
+
+  epochs = 10
+  history = model.fit(
+      current_train_ds_batched,
+      validation_data=val[fold_nr],
+      epochs=epochs,
+      shuffle=False,
+      # Comment the following line to do not save and download the model.
+      #callbacks=[callbacks]
+      )
+
+## Now train the model on the full training set to make the best final predictions onto the test set; predictions to be submit at PAN CLEF2021.
+
+
+
+
+
+
+  # We set a seed for reproducibility purpose.
+  seed = 892315724 
+  
+  print("Seed usato: ", seed)    
+
+  initializer=tf.keras.initializers.GlorotUniform(seed=seed)
+
+  model = tf.keras.Sequential([
+                                tf.keras.Input(shape=(1,), dtype=tf.string),
+                                vectorize_layer,
+                                layers.Embedding(len(vectorize_layer.get_vocabulary()) + 1,embedding_dim,embeddings_initializer=initializer),                     
+                                #layers.Dropout(0.2),
+
+                                #layers.Bidirectional(layers.LSTM(64,return_sequences=True)),
+
+                                layers.Conv1D(64,36,kernel_initializer=initializer,bias_initializer='zeros',activation='relu'),
+                                #layers.MaxPooling1D(4),
+                                layers.AveragePooling1D(8),
+                                
+                                layers.GlobalAveragePooling1D(),
+                                #layers.GlobalMaxPooling1D(),
+                                layers.Dense(1,kernel_initializer=initializer,bias_initializer='zeros')
+      ])
+      
+  opt = tf.keras.optimizers.Adam()
+  model.compile(loss=losses.BinaryCrossentropy(from_logits=True), optimizer=opt, metrics=tf.metrics.BinaryAccuracy(threshold=0.0)) 
+
+  epochs = 5
+
+  # Next line to reset the random tf generator.                                              
+  np.random.seed(1)   
+  random.seed(2)                                             
+  tf.random.set_seed(1234)
+
+  history = model.fit(
+      full_train_ds_batched,
+      epochs=epochs,
+      shuffle=False,
+      # Comment the following line to do not save and download the model.
+      callbacks=[callbacks]
+      )
+      
+  model.summary()
+
+  tf.keras.utils.plot_model(model, "my_first_model_with_shape_info.png", show_shapes=True)
+
+## Plot training process results.
+
+
+
+
+history_dict = history.history
+history_dict.keys()
+
+acc = history_dict['binary_accuracy']
+#val_acc = history_dict['val_binary_accuracy']
+loss = history_dict['loss']
+#val_loss = history_dict['val_loss']
+
+epochs = range(1, len(acc) + 1)
+
+# "bo" is for "blue dot"
+plt.plot(epochs, loss, 'bo', label='Training loss')
+# b is for "solid blue line"
+#plt.plot(epochs, val_loss, 'b', label='Validation loss')
+plt.title('Training loss')
+plt.xlabel('Epochs')
+#plt.ylabel('Loss')
+plt.legend()
+
+plt.show()
+
+
+plt.plot(epochs, acc, 'bo', label='Training acc')
+#plt.plot(epochs, val_acc, 'b', label='Validation acc')
+plt.title('Training  accuracy')
+plt.xlabel('Epochs')
+plt.ylabel('Accuracy')
+plt.legend(loc='lower right')
+
+plt.show()
+
+## Generate predictions and write into separate XML files. (1 file -> 1 author prediction)
+
+# msiino_hss2021task_predictions/en/aId.xml
+if not os.path.exists('msiino_hss2021task_predictions'):
+    os.makedirs('msiino_hss2021task_predictions')
+if not os.path.exists('msiino_hss2021task_predictions/en/'):
+    os.makedirs('msiino_hss2021task_predictions/en/')
+if not os.path.exists('msiino_hss2021task_predictions/es/'):
+    os.makedirs('msiino_hss2021task_predictions/es/')
+
+languages=['en','es']
+prediction_counter=0
+for language in languages: 
+  for filename in os.listdir('test_dir_'+language+'/unlabelled/'):
+    if filename!=".txt":
+      prediction_counter+=1
+      print("\nFile nr.: ", prediction_counter)
+      
+      x = filename.split(".")
+      
+      author_id = x[0]
+      print("Filename:", filename)
+
+      if not os.path.exists('tmp_test_author_dir/'+author_id):
+        os.makedirs('tmp_test_author_dir/'+author_id)
+      
+      if os.path.exists('test_dir_'+language+'/unlabelled/'+filename):
+        shutil.copyfile('test_dir_'+language+'/unlabelled/'+filename, 'tmp_test_author_dir/'+author_id+'/'+filename )
+
+      test_ds = tf.keras.preprocessing.text_dataset_from_directory(
+        'tmp_test_author_dir', 
+        batch_size=1,
+        shuffle=False
+        )
+      
+      for current_sample in test_ds:
+        if model.predict(current_sample)[0][0]>0.0:
+          prediction=1
+        else:
+          prediction=0
+        #prediction = model.predict_classes(current_sample)[0][0]
+      print("Author id:",author_id)
+      print("Language:", language)
+      print("Class predicted:", prediction)
+      print("Model output: ", model.predict(current_sample))
+      xml_content= "<author id=\"" + author_id + "\" lang=\"" + language + "\" type=\"" + str(prediction) + "\" />"
+
+      f = open("msiino_hss2021task_predictions/"+language+"/"+author_id+".xml", "a")
+      f.write(xml_content)
+      f.close()
+
+      shutil.rmtree('tmp_test_author_dir/'+author_id)
+
+
+## Zip and Download the predictions (remember to set Callback to use this!).
+
+!zip -r msiino_hss2021task_predictions.zip msiino_hss2021task_predictions
+# If automatic download doesn't start, open the directory browser on the left menu and download the zip file manually.
+files.download("msiino_hss2021task_predictions.zip")
